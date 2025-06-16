@@ -1,0 +1,42 @@
+# requirements.txt
+
+# --- System-level Dependencies ---
+# Must be first to be available for chromadb
+pysqlite3-binary
+
+# --- Core Web & AI Frameworks ---
+streamlit
+google-generativeai
+langchain # For text splitting and map-reduce patterns
+
+# --- Background Task Processing ---
+celery
+redis
+
+# --- Database Connectors & ORM ---
+sqlalchemy
+psycopg2-binary # For PostgreSQL
+chromadb # Vector DB client
+
+# --- Data Ingestion & Parsing ---
+arxiv
+requests
+beautifulsoup4
+trafilatura # For robust main content extraction from HTML
+
+# --- Semantic Search & AI Models ---
+sentence-transformers # For creating vector embeddings
+
+# --- Utilities & System Monitoring ---
+python-dotenv # For loading .env files
+pandas # For data manipulation
+psutil # For system health monitoring
+googlesearch-python # For the sourcerer service to find new blogs
+sendgrid # For sending email reports
+
+# --- Celery Beat Scheduler ---
+django-celery-beat # For scheduling tasks (best-in-class scheduler)
+
+# --- NEW: Dependencies for django-celery-beat ---
+Django
+pytz

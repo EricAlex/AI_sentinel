@@ -1,0 +1,27 @@
+# Dockerfile.scraper
+
+FROM python:3.10-slim-bullseye
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# --- NEW SECTION: Pre-download the model ---
+# Copy the download script into the image
+COPY download_model.py .
+# Run the script to download and cache the model. This layer will be cached by Docker.
+RUN python download_model.py
+# -------------------------------------------
+
+# Copy application code
+COPY . .
+
+# This command runs the scraper script in an infinite loop with a sleep interval.
+# This is a simple and effective cron-like behavior within Docker.
+# The 'echo' provides useful log output to see when a cycle has finished.
+CMD ["sh", "-c", "while true; do python scraper.py; echo 'Scraper cycle complete. Sleeping for 1 hour.'; sleep 3600; done"]

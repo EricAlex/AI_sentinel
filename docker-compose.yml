@@ -1,0 +1,117 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # --- INFRASTRUCTURE SERVICES ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: synthesis_engine_db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ai_progress
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # Expose for potential external DB tools
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d ai_progress"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    logging: &logging_config
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: synthesis_engine_broker
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging: *logging_config
+
+  chroma:
+    image: chromadb/chroma
+    container_name: synthesis_engine_vectordb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/.chroma/
+    healthcheck:
+      test: ["CMD-SHELL", "apt-get update -y && apt-get install -y net-tools && netstat -tuln | grep ':8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    logging: *logging_config
+
+  # --- APPLICATION SERVICES ---
+  streamlit_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: synthesis_engine_ui
+    ports:
+      - "8501:8501"
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      chroma: { condition: service_healthy }
+    restart: unless-stopped
+    logging: *logging_config
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.celery
+    container_name: synthesis_engine_worker
+    # Limit the worker to 1 parallel processes.
+    command: celery -A celery_app.celery worker --loglevel=info --concurrency=1
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      chroma: { condition: service_healthy }
+    # To scale workers: `docker-compose up --scale celery_worker=3`
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    logging: *logging_config
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.celery # Reuses the same image as the worker
+    container_name: synthesis_engine_beat
+    command: >
+      sh -c "DJANGO_SETTINGS_MODULE=django_settings celery -A celery_app.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+    logging: *logging_config
+
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: synthesis_engine_scraper
+    env_file: .env
+    depends_on:
+      - celery_worker # Ensures queue is ready to receive tasks
+    restart: unless-stopped
+    logging: *logging_config
+
+volumes:
+  postgres_data:
+  chroma_data:
