@@ -11,12 +11,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- NEW SECTION: Pre-download the model ---
-# Copy the download script into the image
-COPY download_model.py .
-# Run the script to download and cache the model. This layer will be cached by Docker.
-RUN python download_model.py
-# -------------------------------------------
+# This makes the model files part of the image, ensuring they are always available.
+COPY ./models /app/models
 
 # Copy application code
 COPY . .

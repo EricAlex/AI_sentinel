@@ -14,15 +14,21 @@ import time
 from celery_app import celery
 # --- Update the import ---
 from ingest import fetch_from_arxiv, fetch_from_web_sources
-from services import analyze_and_rank_progress
+from services import analyze_rank_and_translate
 from database import SessionLocal, add_progress_item, ProgressItem
 from sentence_transformers import SentenceTransformer
 import chromadb
 
 # --- Initialize models and clients (no changes here) ---
-print("TASKS: Loading Sentence Transformer model...")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
-print("TASKS: Sentence Transformer model loaded successfully.")
+LOCAL_MODEL_PATH = '/app/models/all-MiniLM-L6-v2'
+
+print("TASKS: Loading Sentence Transformer model from local path...")
+try:
+    embedding_model = SentenceTransformer(LOCAL_MODEL_PATH, device='cpu')
+    print("TASKS: Sentence Transformer model loaded successfully.")
+except Exception as e:
+    print(f"TASKS: FATAL ERROR loading Sentence Transformer model: {e}")
+    embedding_model = None
 
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
@@ -81,18 +87,19 @@ def process_item(self, item_data: dict):
 
     # 2. Perform AI analysis (now using the more robust service layer)
     try:
-        analysis_data = analyze_and_rank_progress(title, item_data['abstract'])
+        # Call the new, all-in-one function
+        analysis_data = analyze_rank_and_translate(title, item_data['abstract'])
         if not analysis_data:
-            raise ValueError("Analysis from Gemini returned None or was invalid.")
+            raise ValueError("Unified analysis from Gemini returned None or was invalid.")
     except Exception as e:
         print(f"TASK: ERROR during Gemini analysis for '{title}': {e}. Retrying...")
         raise self.retry(exc=e)
 
     # 3. Create semantic embedding (using .get() for resilience)
     text_to_embed = (
-        f"Title: {analysis_data.get('title', 'No Title Provided')}\n"
-        f"Innovation: {analysis_data.get('summary_what_is_new', 'No summary available.')}\n"
-        f"Impact: {analysis_data.get('summary_why_it_matters', 'No impact statement available.')}"
+        f"Title: {analysis_data.get('en', {}).get('title', 'No Title Provided')}\n"
+        f"Innovation: {analysis_data.get('en', {}).get('what_is_new', 'No summary available.')}\n"
+        f"Impact: {analysis_data.get('en', {}).get('why_it_matters', 'No impact statement available.')}"
     )
     embedding = embedding_model.encode(text_to_embed).tolist()
 

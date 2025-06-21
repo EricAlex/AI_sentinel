@@ -31,58 +31,158 @@ def get_soup(url):
 # NOTE: These selectors are based on website structures as of mid-2024.
 # They are the most brittle part of the application and will require periodic maintenance.
 
-def parse_google_blog(url: str, source_name: str, max_results=8):
-    """Parses blogs using Google's common 'card' layout (Google AI, DeepMind)."""
-    soup = get_soup(url)
-    if not soup: return []
+def parse_google_blog(url: str, source_name: str, max_results=8) -> list:
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     
-    articles = soup.find_all('a', class_='card', limit=max_results)
-    posts = []
-    for article in articles:
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching URL {url}: {e}")
+        return []
+
+    soup = BeautifulSoup(response.content, 'html.parser')
+    results = []
+    
+    # The main repeating container for each article is a list item within a specific UL
+    articles = soup.select('ul.gdm-pagination__list li.glue-grid__col')
+
+    for article in articles[:max_results]:
         try:
-            post_url = urljoin(url, article['href'])
-            title = article.find('h3').text.strip()
-            abstract = article.find('p').text.strip()
-            date_str = article.find('p', class_='date').text
-            published_date = datetime.strptime(date_str, '%B %d, %Y')
+            card = article.find('a', class_='glue-card')
+            if not card:
+                continue
+
+            # 1. Get the full URL to the article
+            post_url = card.get('href')
+            if not post_url:
+                continue
             
-            posts.append({
-                "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": [source_name], "published_date": published_date,
-                "url": post_url, "source": source_name
+            # Ensure the URL is absolute
+            post_url = urljoin(url, post_url)
+
+            # 2. Get the entry_id from the URL slug
+            entry_id = post_url.strip('/').split('/')[-1]
+
+            # 3. Get the title of the article
+            title_tag = card.find('p', class_='glue-headline--headline-5')
+            title = title_tag.get_text(strip=True) if title_tag else 'No title available'
+
+            # 4. Get the abstract or summary
+            abstract_tag = card.find('p', class_='glue-card__description')
+            abstract = abstract_tag.get_text(strip=True) if abstract_tag else ''
+
+            # 5. Get the published date
+            date_tag = card.find('time')
+            published_date_str = date_tag['datetime'] if date_tag and date_tag.has_attr('datetime') else None
+            
+            if published_date_str:
+                # Parse date and format to ISO 8601 with UTC timezone
+                dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d')
+                published_date = dt_obj.strftime('%Y-%m-%dT00:00:00Z')
+            else:
+                published_date = None
+            
+            # 6. Get authors (not available on the list page)
+            authors = []
+
+            results.append({
+                "entry_id": entry_id,
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "published_date": published_date,
+                "url": post_url,
+                "source": source_name,
             })
+
         except Exception as e:
-            print(f"PARSER: Failed to parse a card from {source_name}: {e}")
+            print(f"Skipping a post due to parsing error: {e}")
             continue
-    return posts
+            
+    return results
 
-def parse_openai_blog(url: str, source_name: str, max_results=8):
-    """Parses the OpenAI Blog."""
-    soup = get_soup(url)
-    if not soup: return []
+def parse_openai_blog(url: str, source_name: str, max_results=8) -> list:
 
-    articles = soup.find_all('a', href=lambda href: href and href.startswith('/blog/'))
-    posts = []
-    unique_urls = set()
-    for article in articles:
-        if len(posts) >= max_results: break
-        
-        post_url = urljoin(url, article['href'])
-        if post_url in unique_urls: continue
+    # Enhanced headers to mimic a real browser and avoid 403 Forbidden errors.
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching URL {url}: {e}")
+        return []
 
-        title_tag = article.find(['h2', 'h3', 'div'], attrs={'data-testid': re.compile(r'heading')})
-        if not title_tag: continue
-        
-        title = title_tag.text.strip()
-        abstract = f"A new post titled '{title}' from the OpenAI blog. Full content will be analyzed."
+    soup = BeautifulSoup(response.content, 'html.parser')
+    results = []
+    
+    # Articles are within 'li' tags, which contain an 'a' tag.
+    posts = soup.select('#content ul > li a[href]')
 
-        posts.append({
-            "entry_id": post_url, "title": title, "abstract": abstract,
-            "authors": ["OpenAI"], "published_date": datetime.utcnow(),
-            "url": post_url, "source": source_name
-        })
-        unique_urls.add(post_url)
-    return posts
+    for post in posts[:max_results]:
+        try:
+            # 1. Get the full URL to the article
+            href = post.get('href')
+            if not href or not href.startswith('/research/'):
+                continue
+            
+            post_url = urljoin(response.url, href)
+
+            # 2. Use the URL slug as a unique entry_id
+            entry_id = href.strip('/').split('/')[-1]
+
+            # 3. Get the title of the article
+            title_tag = post.find('h3')
+            title = title_tag.get_text(strip=True) if title_tag else 'No title available'
+            
+            # 4. Get the abstract or summary
+            abstract_tag = post.find('p')
+            abstract = abstract_tag.get_text(strip=True) if abstract_tag else ''
+
+            # 5. Get the published date from the 'data-date' attribute for reliability
+            date_tag = post.find('span', attrs={'data-date': True})
+            published_date = None
+            if date_tag and date_tag.has_attr('data-date'):
+                published_date_str = date_tag['data-date']
+                try:
+                    dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d')
+                    published_date = dt_obj.strftime('%Y-%m-%dT00:00:00Z')
+                except ValueError as ve:
+                    print(f"Date format error for {published_date_str}: {ve}")
+
+            # 6. Authors are not listed on the main blog page
+            authors = []
+
+            results.append({
+                "entry_id": entry_id,
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "published_date": published_date,
+                "url": post_url,
+                "source": source_name,
+            })
+
+        except Exception as e:
+            print(f"Skipping a post due to a parsing error: {e}")
+            continue
+
+    return results
 
 def parse_meta_blog(url: str, source_name: str, max_results=8):
     """Parses the Meta AI Blog, which uses a more modern card structure."""
@@ -113,31 +213,77 @@ def parse_meta_blog(url: str, source_name: str, max_results=8):
             continue
     return posts
 
-def parse_huggingface_blog(url: str, source_name: str, max_results=8):
-    """Parses the Hugging Face Blog."""
-    soup = get_soup(url)
-    if not soup: return []
-    
-    articles = soup.find_all('a', class_='block', limit=max_results*2)
-    posts = []
-    for article in articles:
-        if '/blog/' not in article['href']: continue
-        if len(posts) >= max_results: break
+def parse_huggingface_blog(url: str, source_name: str, max_results=8) -> list:
 
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching URL {url}: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    results = []
+    
+    # Articles are contained within divs with a 'data-target' attribute.
+    # The data is conveniently stored in a 'data-props' JSON string.
+    article_divs = soup.select('div[data-target="BlogThumbnail"]')
+
+    for article_div in article_divs[:max_results]:
         try:
-            post_url = urljoin(url, article['href'])
-            title = article.find('h3').text.strip()
-            abstract = article.find('div', class_='text-gray-500').text.strip()
+            props_str = article_div.get('data-props')
+            if not props_str:
+                continue
+
+            data = json.loads(props_str)
+            blog_data = data.get('blog')
+
+            if not blog_data:
+                continue
             
-            posts.append({
-                "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": ["Hugging Face"], "published_date": datetime.utcnow(),
-                "url": post_url, "source": source_name
+            slug = blog_data.get('slug')
+            if not slug:
+                continue
+                
+            post_url = urljoin(url, f"blog/{slug}")
+            entry_id = slug
+
+            title = blog_data.get('title', 'No title available')
+            
+            authors_list = blog_data.get('authors', [])
+            authors = [author.get('user') for author in authors_list if author.get('user')]
+            
+            published_date_str = blog_data.get('publishedAt')
+            
+            # Ensure the date is valid and format it consistently
+            if published_date_str:
+                # The date is already in ISO 8601 format, e.g., "2025-06-16T00:00:00.000Z"
+                # We can parse it to validate and then reformat, or use as is.
+                # Let's parse and reformat to ensure consistency without milliseconds.
+                dt_obj = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+                published_date = dt_obj.strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                published_date = None
+            
+            results.append({
+                "entry_id": entry_id,
+                "title": title,
+                "abstract": "",  # No abstract available on the blog listing page
+                "authors": authors,
+                "published_date": published_date,
+                "url": post_url,
+                "source": source_name,
             })
-        except Exception as e:
-            print(f"PARSER: Failed to parse a card from {source_name}: {e}")
+
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            print(f"Skipping a post due to parsing error: {e}")
             continue
-    return posts
+            
+    return results
 
 def parse_microsoft_blog(url: str, source_name: str, max_results=8):
     """Parses the Microsoft Research AI Blog."""

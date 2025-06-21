@@ -66,6 +66,16 @@ class CorrectionFlag(Base):
     status = Column(String, default='pending', index=True) # pending, resolved
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class ParserProposal(Base):
+    """Stores AI-generated proposals for broken parsers."""
+    __tablename__ = 'parser_proposals'
+
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey('sources.id'), index=True)
+    proposed_code = Column(Text, nullable=False)
+    validation_output_sample = Column(JSON) # Store a sample of what the new parser found
+    status = Column(String, default='pending_review', index=True) # pending_review, approved, rejected
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 # --- Database Utility Functions ---
 
@@ -110,38 +120,100 @@ def add_progress_item(item_data: dict):
 
 def get_all_progress_items():
     """
-    Fetches all processed items from the database and formats them for the Streamlit UI.
-    This flattens the nested JSON data for easier use in Pandas.
-    
-    Returns: A list of flattened dictionaries.
+    Fetches all items and flattens the NEW multi-lingual structure for the UI.
     """
     db = SessionLocal()
     try:
         items = db.query(ProgressItem).order_by(ProgressItem.published_date.desc()).all()
         results = []
         for item in items:
-            # Flatten the nested analysis_data for easier display and filtering
             analysis = item.analysis_data or {}
-            scores = analysis.get('scores', {})
+            ranking = analysis.get('ranking', {})
             
             flat_item = {
                 "id": item.id,
                 "url": item.url,
                 "source": item.source,
-                "published_date": item.published_date.date(),
-                "title": analysis.get('title', item.title),
-                "summary_what_is_new": analysis.get('summary_what_is_new', ''),
-                "summary_how_it_works": analysis.get('summary_how_it_works', ''),
-                "summary_why_it_matters": analysis.get('summary_why_it_matters', ''),
+                "published_date": item.published_date.date() if item.published_date else 'N/A',
+                "analysis_data": analysis, # Pass the full rich object to the UI
+                
+                # Flattened fields for searching/sorting, always from English
+                "title": analysis.get('en', {}).get('title', 'Untitled'),
                 "keywords": analysis.get('keywords', []),
-                "overall_importance_score": float(analysis.get('overall_importance_score', 0.0)),
-                "overall_importance_justification": analysis.get('overall_importance_justification', ''),
-                "novelty_score": scores.get('breakthrough_novelty', {}).get('score', 0),
-                "human_impact_score": scores.get('human_impact', {}).get('score', 0),
-                "field_influence_score": scores.get('field_influence', {}).get('score', 0),
-                "technical_maturity_score": scores.get('technical_maturity', {}).get('score', 0),
+                "overall_importance_score": float(ranking.get('overall_importance_score', 0.0)),
             }
             results.append(flat_item)
         return results
+    finally:
+        db.close()
+
+def get_all_sources():
+    """Fetches all sources from the database."""
+    db = SessionLocal()
+    try:
+        return db.query(Source).all()
+    finally:
+        db.close()
+
+def add_new_source(name: str, url: str, source_type: str):
+    """Adds a new source to the database."""
+    db = SessionLocal()
+    try:
+        # Check if source already exists to prevent duplicates
+        exists = db.query(Source).filter((Source.name == name) | (Source.url == url)).first()
+        if exists:
+            print(f"DATABASE: Source '{name}' or URL '{url}' already exists.")
+            return None
+        
+        new_source = Source(name=name, url=url, source_type=source_type, is_active=True)
+        db.add(new_source)
+        db.commit()
+        db.refresh(new_source)
+        print(f"DATABASE: Successfully added new source '{name}'.")
+        return new_source
+    except Exception as e:
+        db.rollback()
+        print(f"DATABASE: Error adding new source: {e}")
+        return None
+    finally:
+        db.close()
+
+def update_source(source_id: int, new_data: dict):
+    """Updates an existing source's data."""
+    db = SessionLocal()
+    try:
+        source = db.query(Source).get(source_id)
+        if not source:
+            return False
+        
+        for key, value in new_data.items():
+            setattr(source, key, value)
+        
+        db.commit()
+        print(f"DATABASE: Successfully updated source ID {source_id}.")
+        return True
+    except Exception as e:
+        db.rollback()
+        print(f"DATABASE: Error updating source: {e}")
+        return False
+    finally:
+        db.close()
+
+def delete_source(source_id: int):
+    """Deletes a source from the database."""
+    db = SessionLocal()
+    try:
+        source = db.query(Source).get(source_id)
+        if not source:
+            return False
+        
+        db.delete(source)
+        db.commit()
+        print(f"DATABASE: Successfully deleted source ID {source_id}.")
+        return True
+    except Exception as e:
+        db.rollback()
+        print(f"DATABASE: Error deleting source: {e}")
+        return False
     finally:
         db.close()

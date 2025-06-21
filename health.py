@@ -15,30 +15,42 @@ CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
 
 def get_celery_stats():
     """
-    Gets detailed statistics from the Celery workers.
-    Safely handles cases where workers might be offline.
-    
-    Returns: A dictionary with worker status and stats.
+    A simplified and more robust function to get Celery stats.
+    It prioritizes getting worker stats but gracefully reports status
+    if workers are busy or the broker is down.
     """
+    # First, check if the broker itself is reachable.
+    if get_redis_status() != "Online":
+        return {"status": "Error", "message": "Broker connection is down."}
+
     try:
-        inspector = celery.control.inspect(timeout=1.0) # Set a timeout to prevent hanging
+        inspector = celery.control.inspect(timeout=2.0)
         stats = inspector.stats()
-        active_tasks = inspector.active()
         
-        # If stats is None, it means no workers responded to the ping.
         if not stats:
+            # If no stats are returned, it means workers are offline or too busy to respond.
             return {
-                "status": "Offline", 
-                "message": "No active workers found.",
-                "active_workers": 0, 
-                "total_tasks_processed": 0, 
-                "tasks_in_progress": 0
+                "status": "Idle / Unresponsive",
+                "message": "No workers responded to ping. They may be busy or offline.",
+                "active_workers": 0,
+                "total_tasks_processed": "N/A",
+                "tasks_in_progress": "N/A"
             }
-        
+
+        # If we get here, at least one worker responded.
         worker_count = len(stats)
-        total_processed = sum(worker.get('total', 0) for worker in stats.values())
-        tasks_in_progress = sum(len(tasks) for tasks in active_tasks.values()) if active_tasks else 0
-        
+        total_processed = 0
+        for worker_stats in stats.values():
+            if isinstance(worker_stats, dict) and isinstance(worker_stats.get('total'), int):
+                total_processed += worker_stats.get('total', 0)
+
+        tasks_in_progress = 0
+        active = inspector.active()
+        if active:
+            for worker_tasks in active.values():
+                if isinstance(worker_tasks, list):
+                    tasks_in_progress += len(worker_tasks)
+            
         return {
             "status": "Online",
             "message": f"{worker_count} worker(s) responding.",
@@ -46,10 +58,28 @@ def get_celery_stats():
             "total_tasks_processed": total_processed,
             "tasks_in_progress": tasks_in_progress
         }
-    except IOError as e:
-        return {"status": "Error", "message": f"Broker connection error: {e}"}
+
     except Exception as e:
-        return {"status": "Error", "message": str(e)}
+        # This catches any other unexpected errors from celery.control
+        print(f"HEALTH: An unexpected error occurred in get_celery_stats: {e}")
+        return {"status": "Error", "message": "Failed to inspect workers."}
+
+
+def get_redis_status():
+    """
+    Checks the Redis message broker connection and returns 'Online' or 'Offline'.
+    """
+    if not CELERY_BROKER_URL:
+        return "Not Configured"
+    try:
+        # Use the same connection method as our other services for consistency
+        redis_client = Redis.from_url(CELERY_BROKER_URL, socket_connect_timeout=2)
+        return "Online" if redis_client.ping() else "Offline"
+    except redis_exceptions.ConnectionError:
+        return "Offline"
+    except Exception as e:
+        print(f"HEALTH: An unexpected Redis error occurred: {e}")
+        return "Error"
 
 def get_db_status():
     """

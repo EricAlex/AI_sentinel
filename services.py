@@ -31,24 +31,22 @@ safety_settings = [
 ]
 
 model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash-preview-05-20", # Use the latest, most capable model
+    model_name="gemini-2.5-flash", # Use the latest, most capable model
     generation_config=generation_config,
     safety_settings=safety_settings
 )
 
 # --- Prompts ---
-SUMMARY_PROMPT_TEMPLATE = """
-You are a world-class AI research analyst. Your task is to analyze the provided text from an AI research paper or blog post and generate a structured, insightful summary.
+UNIFIED_PROMPT_TEMPLATE = """
+You are a world-class, multi-lingual AI research analyst. Your task is to perform a comprehensive analysis of the provided text and return a single, structured JSON object.
 
 **Instructions:**
-1.  Read the provided title and abstract/content carefully.
-2.  Identify the core problem, the proposed solution, the key results, and the potential impact.
-3.  Synthesize this information into the specified JSON format. Be concise but informative.
-4.  The title must be exactly as provided.
-5.  All fields in the JSON object are mandatory.
-6.  It is critical for my application that you strictly adhere to the provided JSON schema and include all fields.
+1.  **Analyze:** Read the provided English title and content to understand the core innovation, methodology, results, and impact.
+2.  **Summarize & Translate:** Generate the content for the `en` (English) object first. Then, translate the `title`, `what_is_new`, `how_it_works`, `why_it_matters`, and `overall_importance_justification` fields accurately and naturally into each of the specified target languages: `zh` (Simplified Chinese).
+3.  **Rank:** Based on your English analysis, provide the numeric scores. Justifications should also be translated.
+4.  **Format:** Your entire response must be a single, valid JSON object adhering strictly to the schema below. All fields are mandatory.
 
-**Title:**
+**Original English Title:**
 {title}
 
 **Content for Analysis:**
@@ -58,40 +56,30 @@ You are a world-class AI research analyst. Your task is to analyze the provided 
 
 **Output Schema (JSON):**
 {{
-  "title": "{title}",
-  "summary_what_is_new": "A single, compelling paragraph explaining the core innovation or breakthrough.",
-  "summary_how_it_works": "A slightly more detailed but easy-to-understand explanation of the methodology or technology.",
-  "summary_why_it_matters": "A paragraph explaining the potential impact on the AI field, specific industries, or humanity.",
-  "keywords": ["An", "array", "of", "5-7", "highly", "relevant", "keywords"]
-}}
-"""
-
-RANKING_PROMPT_TEMPLATE = """
-You are an expert committee of AI researchers, venture capitalists, and ethicists.
-Your task is to provide a multi-faceted score for the following AI breakthrough based on its summary.
-
-**Instructions:**
-1.  Review the provided summary JSON.
-2.  For each category, provide a score from 1 to 10 and a concise, well-reasoned justification.
-3.  The `overall_importance_score` should be a weighted consideration of the other factors, representing its total significance. Do not just average them. Consider novelty and influence more heavily.
-4.  Output a single, valid JSON object with the exact schema provided.
-5.  It is critical for my application that you strictly adhere to the provided JSON schema and include all fields.
-
-**Summary for Scoring:**
----
-{summary_json}
----
-
-**Output Schema (JSON):**
-{{
-  "scores": {{
-    "breakthrough_novelty": {{ "score": "[1-10]", "justification": "Justification for the novelty score." }},
-    "human_impact": {{ "score": "[1-10]", "justification": "Justification for the human impact score." }},
-    "field_influence": {{ "score": "[1-10]", "justification": "Justification for the field influence score." }},
-    "technical_maturity": {{ "score": "[1-10]", "justification": "Justification for the technical maturity score." }}
+  "en": {{
+    "title": "{title}",
+    "what_is_new": "A compelling paragraph in English explaining the core innovation.",
+    "how_it_works": "An easy-to-understand explanation in English of the methodology.",
+    "why_it_matters": "A paragraph in English explaining the potential impact.",
+    "overall_importance_justification": "A final synthesis in English of why this breakthrough is important."
   }},
-  "overall_importance_score": "[A single floating-point number from 1.0 to 10.0, e.g., 8.7]",
-  "overall_importance_justification": "A final synthesis of why this breakthrough is or isn't important, considering all factors."
+  "zh": {{
+    "title": "一个翻译成简体中文的准确标题。",
+    "what_is_new": "一个引人注目的段落，用简体中文解释核心创新。",
+    "how_it_works": "一个易于理解的解释，用简体中文说明其方法论。",
+    "why_it_matters": "一个段落，用简体中文解释其潜在影响。",
+    "overall_importance_justification": "一段最终综合陈述，用简体中文说明此突破为何重要。"
+  }},
+  "keywords": ["An", "array", "of", "5-7", "English", "keywords"],
+  "ranking": {{
+    "scores": {{
+      "breakthrough_novelty": {{ "score": "[1-10]", "justification": "Justification in English." }},
+      "human_impact": {{ "score": "[1-10]", "justification": "Justification in English." }},
+      "field_influence": {{ "score": "[1-10]", "justification": "Justification in English." }},
+      "technical_maturity": {{ "score": "[1-10]", "justification": "Justification in English." }}
+    }},
+    "overall_importance_score": "[A single floating-point number from 1.0 to 10.0, e.g., 8.7]"
+  }}
 }}
 """
 
@@ -124,34 +112,26 @@ def clean_json_response(response_text):
             print(f"--- FAULTY JSON STRING --- \n{json_str}\n--------------------------")
             return None
 
-def analyze_and_rank_progress(title: str, content_text: str):
+def analyze_rank_and_translate(title: str, content_text: str):
     """
-    Performs a two-step AI analysis. Now using the robust JSON cleaner.
+    Performs summarization, ranking, and translation in a single API call.
+
+    Returns:
+        A single, comprehensive dictionary, or None on failure.
     """
-    print(f"SERVICES: Starting analysis for '{title}'")
+    print(f"SERVICES: Starting unified analysis for '{title}'")
     
-    # Step 1: Summarization
     try:
-        summary_prompt = SUMMARY_PROMPT_TEMPLATE.format(title=title, content_text=content_text)
-        summary_response = model.generate_content(summary_prompt)
-        summary_data = clean_json_response(summary_response.text)
-        if not summary_data:
-            raise ValueError("Cleaned summary JSON is None.")
+        prompt = UNIFIED_PROMPT_TEMPLATE.format(title=title, content_text=content_text)
+        response = model.generate_content(prompt)
+        analysis_data = clean_json_response(response.text)
+        
+        if not analysis_data:
+            raise ValueError("Cleaned JSON from Gemini is None.")
+            
+        print(f"SERVICES: Unified analysis complete for '{title}'")
+        return analysis_data
+        
     except Exception as e:
-        print(f"SERVICES: ERROR in summarization step for '{title}': {e}")
+        print(f"SERVICES: ERROR in unified analysis step for '{title}': {e}")
         return None
-
-    # Step 2: Ranking
-    try:
-        summary_json_str = json.dumps(summary_data, indent=2)
-        ranking_prompt = RANKING_PROMPT_TEMPLATE.format(summary_json=summary_json_str)
-        ranking_response = model.generate_content(ranking_prompt)
-        ranking_data = clean_json_response(ranking_response.text)
-        if not ranking_data:
-            raise ValueError("Cleaned ranking JSON is None.")
-    except Exception as e:
-        print(f"SERVICES: ERROR in ranking step for '{title}': {e}")
-        return None
-
-    final_result = {**summary_data, **ranking_data}
-    return final_result

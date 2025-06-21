@@ -15,16 +15,16 @@ def add_initial_sources(db_session):
         {'name': 'arXiv (AI/ML/CV/CL)', 'url': 'https://arxiv.org/corr/home', 'source_type': 'arxiv', 'is_active': True},
         
         # --- Top-Tier Industry Blogs ---
-        {'name': 'Google AI Blog', 'url': 'https://ai.google/blog/', 'source_type': 'google_blog', 'is_active': True},
-        {'name': 'OpenAI Blog', 'url': 'https://openai.com/blog', 'source_type': 'openai_blog', 'is_active': True},
-        {'name': 'DeepMind Blog', 'url': 'https://deepmind.google/blog', 'source_type': 'deepmind_blog', 'is_active': True},
+        {'name': 'Google AI Blog', 'url': 'https://ai.google/research/', 'source_type': 'google_blog', 'is_active': True},
+        {'name': 'OpenAI Blog', 'url': 'https://openai.com/news/research/', 'source_type': 'openai_blog', 'is_active': True},
+        {'name': 'DeepMind Blog', 'url': 'https://deepmind.google/discover/blog/', 'source_type': 'deepmind_blog', 'is_active': True},
         {'name': 'Meta AI Blog', 'url': 'https://ai.meta.com/blog/', 'source_type': 'meta_blog', 'is_active': True},
         {'name': 'Hugging Face Blog', 'url': 'https://huggingface.co/blog', 'source_type': 'huggingface_blog', 'is_active': True},
-        {'name': 'NVIDIA AI Blog', 'url': 'https://blogs.nvidia.com/ai-inference/', 'source_type': 'nvidia_blog', 'is_active': True},
+        {'name': 'NVIDIA AI Blog', 'url': 'https://blogs.nvidia.com/blog/category/generative-ai/', 'source_type': 'nvidia_blog', 'is_active': True},
         {'name': 'Microsoft Research AI', 'url': 'https://www.microsoft.com/en-us/research/blog/category/artificial-intelligence/', 'source_type': 'microsoft_blog', 'is_active': True},
 
         # --- High-Quality Curated News & Publications ---
-        {'name': 'MIT Technology Review (AI)', 'url': 'https://www.technologyreview.com/c/artificial-intelligence/', 'source_type': 'techreview_ai', 'is_active': True},
+        {'name': 'MIT Technology Review (AI)', 'url': 'https://www.technologyreview.com/topic/artificial-intelligence/', 'source_type': 'techreview_ai', 'is_active': True},
         {'name': 'The Gradient', 'url': 'https://thegradient.pub/', 'source_type': 'gradient_pub', 'is_active': True},
     ]
 

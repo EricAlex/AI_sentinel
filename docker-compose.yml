@@ -39,18 +39,19 @@ services:
     logging: *logging_config
 
   chroma:
-    image: chromadb/chroma
+    build:
+      context: ./chroma  # The path to the directory containing the Dockerfile
     container_name: synthesis_engine_vectordb
     ports:
       - "8000:8000"
     volumes:
       - chroma_data:/chroma/.chroma/
     healthcheck:
-      test: ["CMD-SHELL", "apt-get update -y && apt-get install -y net-tools && netstat -tuln | grep ':8000'"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      interval: 15s
+      timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 10s
     restart: unless-stopped
     logging: *logging_config
 
@@ -81,6 +82,14 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       chroma: { condition: service_healthy }
+    healthcheck:
+      # This command asks celery to ping itself through the broker.
+      # It's the most reliable way to check if the worker is truly ready.
+      test: ["CMD", "celery", "-A", "celery_app.celery", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
     # To scale workers: `docker-compose up --scale celery_worker=3`
     deploy:
       replicas: 1
