@@ -217,3 +217,22 @@ def delete_source(source_id: int):
         return False
     finally:
         db.close()
+
+def delete_followed_term(term_to_delete: str):
+    """Deletes a followed term from the database."""
+    db = SessionLocal()
+    try:
+        term_object = db.query(FollowedTerm).filter(FollowedTerm.term == term_to_delete).first()
+        if term_object:
+            db.delete(term_object)
+            db.commit()
+            print(f"DATABASE: Successfully deleted followed term '{term_to_delete}'.")
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        print(f"DATABASE: Error deleting followed term: {e}")
+        return False
+    finally:
+        db.close()
+

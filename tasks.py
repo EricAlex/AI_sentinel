@@ -95,11 +95,17 @@ def process_item(self, item_data: dict):
         print(f"TASK: ERROR during Gemini analysis for '{title}': {e}. Retrying...")
         raise self.retry(exc=e)
 
-    # 3. Create semantic embedding (using .get() for resilience)
+    # 3. Create semantic embedding (now including keywords for better search)
+    title_en = analysis_data.get('en', {}).get('title', 'No Title Provided')
+    what_is_new_en = analysis_data.get('en', {}).get('what_is_new', 'No summary available.')
+    why_it_matters_en = analysis_data.get('en', {}).get('why_it_matters', 'No impact statement available.')
+    keywords_en = ", ".join(analysis_data.get('keywords', [])) # Join keywords into a string
+
     text_to_embed = (
-        f"Title: {analysis_data.get('en', {}).get('title', 'No Title Provided')}\n"
-        f"Innovation: {analysis_data.get('en', {}).get('what_is_new', 'No summary available.')}\n"
-        f"Impact: {analysis_data.get('en', {}).get('why_it_matters', 'No impact statement available.')}"
+        f"Title: {title_en}\n"
+        f"Keywords: {keywords_en}\n\n" # Add the keywords here
+        f"Innovation: {what_is_new_en}\n\n"
+        f"Impact: {why_it_matters_en}"
     )
     embedding = embedding_model.encode(text_to_embed).tolist()
 
