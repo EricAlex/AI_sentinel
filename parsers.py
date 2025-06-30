@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import re
 from urllib.parse import urljoin
+from googlesearch import search
 
 # --- Standard Request Headers to mimic a browser ---
 HEADERS = {
@@ -312,29 +313,46 @@ def parse_microsoft_blog(url: str, source_name: str, max_results=8):
             continue
     return posts
 
-def parse_techreview_ai(url: str, source_name: str, max_results=8):
-    """Parses the MIT Technology Review AI section."""
+def parse_techreview_ai(url: str, source_name: str, max_results=8) -> list:
+    """Parses the MIT Technology Review AI section with updated selectors."""
     soup = get_soup(url)
-    if not soup: return []
+    if not soup:
+        return []
 
-    articles = soup.find_all('div', class_=re.compile(r'promo-container'), limit=max_results)
+    # Use a more specific selector to target the list of articles
+    articles_list = soup.select('div[class*="feed-content"] ul[class*="basic-list"] > li')
     posts = []
-    for article in articles:
+
+    for article in articles_list[:max_results]:
         try:
-            link_tag = article.find('a', href=True)
-            if not link_tag: continue
-            
-            post_url = urljoin(url, link_tag['href'])
-            title_tag = article.find(['h2', 'h3'])
-            title = title_tag.text.strip() if title_tag else "Untitled"
-            
-            abstract_tag = article.find('p')
+            # Find the title and link within the headline element
+            title_tag = article.select_one('h3[class*="headline"] a')
+            if not title_tag or not title_tag.has_attr('href'):
+                continue
+
+            post_url = urljoin(url, title_tag['href'])
+            title = title_tag.get_text(strip=True)
+
+            # The entry ID can be derived from the URL
+            entry_id = f"techreview-{post_url.split('/')[-2]}"
+
+            # The abstract is in a separate paragraph tag
+            abstract_tag = article.select_one('p[class*="dek"] a')
             abstract = abstract_tag.text.strip() if abstract_tag else ""
-            
+
+            # Date and authors are not easily available on the list page, so we set defaults.
+            # A more advanced implementation might visit each post_url to get these details.
+            published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            authors = ["MIT Technology Review"]
+
             posts.append({
-                "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": ["MIT Tech Review"], "published_date": datetime.utcnow(),
-                "url": post_url, "source": source_name
+                "entry_id": entry_id,
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "published_date": published_date,
+                "url": post_url,
+                "source": source_name,
             })
         except Exception as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
@@ -370,28 +388,52 @@ def parse_gradient_pub(url: str, source_name: str, max_results=8):
             continue
     return posts
 
-def parse_nvidia_blog(url: str, source_name: str, max_results=8):
-    """Parses the NVIDIA AI Blog."""
+def parse_nvidia_blog(url: str, source_name: str, max_results=8) -> list:
+    """Parses the NVIDIA AI Blog with more robust selectors."""
     soup = get_soup(url)
-    if not soup: return []
+    if not soup:
+        return []
 
-    articles = soup.find_all('li', class_='item', limit=max_results)
+    articles = soup.select('article.excerpt', limit=max_results)
     posts = []
     for article in articles:
         try:
-            link_tag = article.find('a', href=True)
-            if not link_tag: continue
-            
-            post_url = link_tag['href'] # NVIDIA uses full URLs
-            title = article.find('h3').text.strip()
-            
-            abstract_tag = article.find('p')
-            abstract = abstract_tag.text.strip() if abstract_tag else ""
-            
+            link_tag = article.select_one('a.aggregation-card-link')
+            if not link_tag or not link_tag.has_attr('href'):
+                continue
+
+            post_url = urljoin(url, link_tag['href'])
+            title_tag = article.select_one('h3.entry-title')
+            if not title_tag:
+                continue
+            title = title_tag.text.strip()
+
+            entry_id = f"nvidia-{post_url.split('/')[-2]}"
+
+            abstract_tag = article.select_one('div.entry-excerpt')
+            abstract = abstract_tag.text.strip().replace('Read Article', '') if abstract_tag else ""
+
+            date_tag = article.select_one('div.publish-date')
+            published_date = None
+            if date_tag:
+                try:
+                    dt_obj = datetime.strptime(date_tag.text.strip(), '%B %d, %Y')
+                    published_date = dt_obj.strftime('%Y-%m-%dT%H:%M:%SZ')
+                except ValueError:
+                    published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            else:
+                published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            authors = ["NVIDIA"]
+
             posts.append({
-                "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": ["NVIDIA"], "published_date": datetime.utcnow(),
-                "url": post_url, "source": source_name
+                "entry_id": entry_id,
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "published_date": published_date,
+                "url": post_url,
+                "source": source_name,
             })
         except Exception as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")

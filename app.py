@@ -23,6 +23,9 @@ from database import (
     delete_followed_term  # Import the new delete function
 )
 from ui_components import render_progress_card
+from celery.result import AsyncResult
+from tasks import run_scraper_cycle
+from sourcerer import find_new_sources
 
 # --- 1. Page Configuration ---
 st.set_page_config(
@@ -65,6 +68,7 @@ if "my_feed_page" not in st.session_state:
     st.session_state.my_feed_page = 1
 if "page_size" not in st.session_state:
     st.session_state.page_size = 10
+
 
 # Persistent Language State Logic
 LANGUAGES = {'English': 'en', '中文 (Chinese)': 'zh'}
@@ -141,6 +145,38 @@ with st.sidebar:
                     st.rerun()
     finally:
         db.close()
+
+
+    # --- Admin Actions ---
+    st.divider()
+    st.header("Admin Actions")
+
+    if st.button("Run Scraper Cycle", use_container_width=True):
+        task = run_scraper_cycle.delay()
+        st.session_state['scraper_task_id'] = task.id
+
+    if st.button("Find New Sources", use_container_width=True):
+        task = find_new_sources.delay()
+        st.session_state['sourcerer_task_id'] = task.id
+
+    if 'scraper_task_id' in st.session_state:
+        task_id = st.session_state['scraper_task_id']
+        result = AsyncResult(task_id)
+        st.progress(1 if result.ready() else 0, text=f"Scraper: {result.state}")
+        if result.ready():
+            with st.expander("Scraper Result"):
+                st.write(result.get())
+            del st.session_state['scraper_task_id']
+
+
+    if 'sourcerer_task_id' in st.session_state:
+        task_id = st.session_state['sourcerer_task_id']
+        result = AsyncResult(task_id)
+        st.progress(1 if result.ready() else 0, text=f"Sourcerer: {result.state}")
+        if result.ready():
+            with st.expander("Sourcerer Result"):
+                st.write(result.get())
+            del st.session_state['sourcerer_task_id']
 
 
 # --- 5. Main App ---
@@ -243,12 +279,15 @@ def process_and_display_feed(input_df: pd.DataFrame, tab_key_prefix: str):
                         st.rerun()
 
 # --- Tab Definitions ---
-tab_all, tab_feed = st.tabs(["🔥 All Progress", "👤 My Feed"])
+tab_titles = ["🔥 All Progress", "👤 My Feed"]
 
-with tab_all:
+# Use st.radio to simulate tabs and manage active tab state
+selected_tab_title = st.radio("", tab_titles, key="main_tab_selector", horizontal=True)
+
+if selected_tab_title == "🔥 All Progress":
     process_and_display_feed(df, tab_key_prefix="all_progress")
 
-with tab_feed:
+elif selected_tab_title == "👤 My Feed":
     db = SessionLocal()
     followed_terms = [row.term for row in db.query(FollowedTerm.term).all()]
     db.close()
@@ -262,7 +301,7 @@ with tab_feed:
                 lambda row: bool(
                     re.search(pattern, str(row['title']).lower()) or
                     re.search(pattern, str(row['keywords']).lower())
-                ), 
+                ),
                 axis=1
             )]
             process_and_display_feed(my_feed_df, tab_key_prefix="my_feed")
