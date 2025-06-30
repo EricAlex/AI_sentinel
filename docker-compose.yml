@@ -64,6 +64,8 @@ services:
     ports:
       - "8501:8501"
     env_file: .env
+    volumes:
+      - ./parsers.py:/app/parsers.py
     depends_on:
       postgres: { condition: service_healthy }
       chroma: { condition: service_healthy }
@@ -78,6 +80,8 @@ services:
     # Limit the worker to 1 parallel processes.
     command: celery -A celery_app.celery worker --loglevel=info --concurrency=1
     env_file: .env
+    volumes:
+      - ./parsers.py:/app/parsers.py
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -104,6 +108,8 @@ services:
     command: >
       sh -c "DJANGO_SETTINGS_MODULE=django_settings celery -A celery_app.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     env_file: .env
+    volumes:
+      - ./parsers.py:/app/parsers.py
     depends_on:
       - redis
       - postgres
@@ -116,6 +122,8 @@ services:
       dockerfile: Dockerfile.scraper
     container_name: synthesis_engine_scraper
     env_file: .env
+    volumes:
+      - ./parsers.py:/app/parsers.py
     depends_on:
       - celery_worker # Ensures queue is ready to receive tasks
     restart: unless-stopped

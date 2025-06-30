@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from googlesearch import search
+
 import google.generativeai as genai
 from celery_app import celery
 from database import SessionLocal, ParserProposal, Source
@@ -221,7 +223,7 @@ def apply_parser_fix(proposal_id: int):
     print(f"APPLYING FIX: Replacing function '{func_name_to_replace}' in parsers.py...")
 
     try:
-        with open('parsers.py', 'r') as f:
+        with open('/app/parsers.py', 'r') as f:
             lines = f.readlines()
         
         # Find the start and end of the function to replace
@@ -247,17 +249,20 @@ def apply_parser_fix(proposal_id: int):
 
         final_lines = lines[:start_index] + new_code_with_spacing + lines[end_index:]
 
-        with open('parsers.py', 'w') as f:
+        with open('/app/parsers.py', 'w') as f:
             f.writelines(final_lines)
             
         # Update the proposal status
         proposal.status = 'approved'
         db.commit()
         print(f"APPLYING FIX: Successfully updated parsers.py for '{source.name}'.")
+        return f"Successfully applied fix for {source.name}."
+
     except Exception as e:
         proposal.status = 'apply_failed'
         db.commit()
         print(f"APPLYING FIX: ERROR while writing to parsers.py: {e}")
+        return f"Failed to apply fix for {source.name}. Error: {e}"
     finally:
         db.close()
 
