@@ -1,0 +1,9 @@
+python-jose[cryptography]
+fastapi
+uvicorn
+cryptography
+google-generativeai
+openai
+passlib
+bcrypt==3.2.0
+python-multipart

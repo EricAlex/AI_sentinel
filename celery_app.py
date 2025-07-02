@@ -32,9 +32,9 @@ celery.conf.update(
 # This dictionary defines all recurring tasks for the application.
 # Celery Beat will read this schedule and dispatch tasks at the specified times.
 celery.conf.beat_schedule = {
-    # Task to scrape all active sources every hour at minute 0
-    'run-scraper-every-hour': {
-        'task': 'tasks.run_scraper_cycle',
+    # Task to trigger scraper cycles for all tenants every hour at minute 0
+    'run-all-tenant-scrapers-every-hour': {
+        'task': 'tasks.trigger_all_tenant_scrapers',
         'schedule': crontab(minute=0, hour='*'),
     },
     # Task to discover new potential sources once a day at 2 AM

@@ -11,6 +11,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY requirements.auth.txt .
+RUN pip install --no-cache-dir -r requirements.auth.txt
+
 # This makes the model files part of the image, ensuring they are always available.
 COPY ./models /app/models
 

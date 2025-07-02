@@ -41,7 +41,7 @@ def render_progress_card(item: dict, container, lang_code: str = 'en', key_prefi
             
         st.progress(
             int(progress_score_float * 10),
-            text=f"💡 {content_lang.get('overall_importance_justification', 'No justification available.')}"
+            text=f"💡 {ranking.get('overall_importance_justification', 'No justification available.')}"
         )
         st.write("")
 

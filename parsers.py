@@ -28,7 +28,7 @@ def get_soup(url):
         print(f"PARSER: Request failed for {url}: {e}")
         return None
 
-# --- Individual Parsers ---
+# --- Individual Parsers (These will serve as default parsers) ---
 # NOTE: These selectors are based on website structures as of mid-2024.
 # They are the most brittle part of the application and will require periodic maintenance.
 
@@ -440,11 +440,11 @@ def parse_nvidia_blog(url: str, source_name: str, max_results=8) -> list:
             continue
     return posts
 
-# --- Parser Dispatcher Dictionary ---
-# This dictionary maps the `source_type` from the database to the correct parser function.
-# This makes the system pluggable and easy to extend. To add a new source, you
-# create a `parse_new_source` function and add its mapping here.
-PARSER_MAP = {
+# --- Dynamic Parser Loading and Default Parsers ---
+
+# This dictionary will hold references to the default parser functions.
+# It replaces the old PARSER_MAP.
+DEFAULT_PARSERS = {
     'google_blog': parse_google_blog,
     'deepmind_blog': parse_google_blog, # DeepMind uses the same layout as Google AI
     'openai_blog': parse_openai_blog,
@@ -455,3 +455,24 @@ PARSER_MAP = {
     'techreview_ai': parse_techreview_ai,
     'gradient_pub': parse_gradient_pub,
 }
+
+# This function will be used to get the correct parser for a source.
+# It will prioritize custom parsers from the database.
+def get_parser_function(tenant_id: str, source_id: int, source_type: str):
+    from database import get_custom_parser # Import here to avoid circular dependency
+    
+    custom_parser_obj = get_custom_parser(tenant_id, source_id)
+    if custom_parser_obj:
+        try:
+            # Execute the custom parser code in a new namespace
+            local_namespace = {}
+            exec(custom_parser_obj.parser_code, globals(), local_namespace)
+            # Assuming the custom parser code defines a function named 'custom_parse'
+            return local_namespace.get('custom_parse')
+        except Exception as e:
+            print(f"Error loading custom parser for tenant {tenant_id}, source {source_id}: {e}")
+            # Fallback to default if custom parser fails to load
+            pass
+
+    # Fallback to default parser if no custom parser or if custom parser failed to load
+    return DEFAULT_PARSERS.get(source_type)

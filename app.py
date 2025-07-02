@@ -13,19 +13,22 @@ import streamlit as st
 import pandas as pd
 import chromadb
 from sentence_transformers import SentenceTransformer
+import requests
+import json
 
 # Import all necessary functions from our other modules
 from database import (
     SessionLocal,
-    get_all_progress_items,
-    FollowedTerm,
     CorrectionFlag,
-    delete_followed_term  # Import the new delete function
+    add_correction_flag # Import the new add correction flag
 )
 from ui_components import render_progress_card
 from celery.result import AsyncResult
 from tasks import run_scraper_cycle
 from sourcerer import find_new_sources
+
+# --- FastAPI Backend URL ---
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi_app:8000")
 
 # --- 1. Page Configuration ---
 st.set_page_config(
@@ -34,6 +37,145 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# --- Authentication Functions ---
+def register_user(email, password, tenant_name):
+    return call_api("post", "/register", json_data={
+        "email": email,
+        "password": password,
+        "tenant_name": tenant_name,
+    }, retry=False) # Don't retry registration
+
+def refresh_access_token():
+    try:
+        response = requests.post(f"{FASTAPI_URL}/refresh")
+        if response.status_code == 200:
+            token_data = response.json()
+            st.session_state.access_token = token_data["access_token"]
+            return True
+        else:
+            print(f"Refresh token failed: {response.status_code} - {response.text}")
+            return False
+    except requests.exceptions.RequestException as e:
+        print(f"Refresh token request failed: {e}")
+        return False
+
+def call_api(method, endpoint, json_data=None, data=None, params=None, headers=None, retry=True):
+    if headers is None:
+        headers = {}
+    
+    # Add Authorization header if access_token exists
+    if st.session_state.access_token:
+        headers["Authorization"] = f"Bearer {st.session_state.access_token}"
+
+    try:
+        response = requests.request(method, f"{FASTAPI_URL}{endpoint}", json=json_data, data=data, params=params, headers=headers)
+        
+        if response.status_code == 401 and retry:
+            print("Access token expired or invalid. Attempting to refresh...")
+            if refresh_access_token():
+                print("Token refreshed. Retrying original request...")
+                # Retry the original request with the new token
+                headers["Authorization"] = f"Bearer {st.session_state.access_token}"
+                response = requests.request(method, f"{FASTAPI_URL}{endpoint}", json=json_data, data=data, params=params, headers=headers)
+            else:
+                print("Failed to refresh token. Redirecting to login.")
+                st.session_state.logged_in = False
+                st.session_state.access_token = None
+                st.session_state.current_user = None
+                st.cache_data.clear()
+                st.rerun() # Rerun to show login page
+        return response.json(), response.status_code
+    except requests.exceptions.RequestException as e:
+        print(f"API call to {endpoint} failed: {e}")
+        return {"detail": str(e)}, 500
+
+# --- Authentication Functions ---
+def register_user(email, password, tenant_name):
+    return call_api("post", "/register", json_data={
+        "email": email,
+        "password": password,
+        "tenant_name": tenant_name,
+    }, retry=False) # Don't retry registration
+
+def login_user(email, password):
+    # For login, we need to handle the form data directly and not retry
+    response = requests.post(f"{FASTAPI_URL}/token", data={
+        "username": email, # FastAPI expects 'username' in OAuth2PasswordRequestForm
+        "password": password
+    })
+    if response.status_code == 200:
+        token_data = response.json()
+        st.session_state.access_token = token_data["access_token"]
+    return response.json(), response.status_code
+
+def get_current_user_info():
+    return call_api("get", "/users/me/")
+
+# --- API Calls for Followed Terms ---
+def get_followed_terms_api():
+    data, status_code = call_api("get", "/followed_terms/")
+    if status_code == 200:
+        return data
+    return []
+
+def add_followed_term_api(term):
+    return call_api("post", "/followed_terms/", json_data={"term": term})
+
+def delete_followed_term_api(term):
+    _, status_code = call_api("delete", f"/followed_terms/{term}")
+    return status_code
+
+# --- Authentication UI ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
+if not st.session_state.logged_in:
+    st.sidebar.header("Login / Register")
+    # Initialize auth_choice to 'Login' if not already set
+    if "auth_choice" not in st.session_state:
+        st.session_state.auth_choice = "Login"
+
+    auth_choice = st.sidebar.radio("", ["Login", "Register"], key="auth_choice")
+
+    if auth_choice == "Login":
+        with st.sidebar.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                token_data, status_code = login_user(email, password)
+                if status_code == 200:
+                    user_info, user_status_code = get_current_user_info()
+                    if user_status_code == 200:
+                        st.session_state.current_user = user_info
+                        st.session_state.logged_in = True
+                        st.sidebar.success(f"Logged in as {st.session_state.current_user['username']}!")
+                        st.rerun()
+                    else:
+                        st.sidebar.error("Failed to fetch user info.")
+                else:
+                    st.sidebar.error("Login failed. Check email and password.")
+    elif auth_choice == "Register":
+        with st.sidebar.form("register_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            tenant_name = st.text_input("Tenant Name (e.g., MyCompany)")
+            
+            submitted = st.form_submit_button("Register")
+            if submitted:
+                response_data, status_code = register_user(email, password, tenant_name)
+                if status_code == 200:
+                    st.sidebar.success("Registration successful! Please log in.")
+                    st.session_state.auth_choice = "Login" # Switch to login tab
+                    st.rerun()
+                else:
+                    st.sidebar.error(f"Registration failed: {response_data.get('detail', 'Unknown error')}")
+    st.stop() # Stop execution until logged in
 
 # --- 2. Caching and Resource Loading ---
 LOCAL_MODEL_PATH = '/app/models/all-MiniLM-L6-v2'
@@ -52,13 +194,20 @@ def get_chroma_client():
 
 @st.cache_data(ttl=60)
 def load_data():
-    print("Loading data from PostgreSQL...")
-    return get_all_progress_items()
+    print(f"Loading data from FastAPI for tenant {st.session_state.current_user['tenant_id']}...")
+    data, status_code = call_api("get", "/progress_items/")
+    if status_code == 200:
+        return data
+    else:
+        st.error(f"Failed to load data: {status_code} - {data.get('detail', 'Unknown error')}")
+        return []
 
 # --- 3. Initialization ---
 model = get_embedding_model()
 client = get_chroma_client()
 progress_collection = client.get_or_create_collection(name="ai_progress")
+
+# Pass tenant_id to load_data
 all_data = load_data()
 
 # Initialize session state for BOTH tabs' pagination independently
@@ -121,63 +270,81 @@ with st.sidebar:
     # --- Term Management UI ---
     st.divider()
     st.header("Manage My Feed")
-    db = SessionLocal()
-    try:
-        followed_terms = [row.term for row in db.query(FollowedTerm.term).all()]
-        if not followed_terms:
-            st.caption("Not following any terms yet.")
-        else:
-            for term in followed_terms:
-                term_col, button_col = st.columns([4, 1])
-                term_col.write(f"• `{term}`")
-                if button_col.button("❌", key=f"delete_term_{term}", help=f"Stop following '{term}'"):
-                    delete_followed_term(term)
+    
+    # Use the tenant-aware get_followed_terms_api
+    followed_terms_objects = get_followed_terms_api()
+    followed_terms = [term['term'] for term in followed_terms_objects]
+
+    if not followed_terms:
+        st.caption("Not following any terms yet.")
+    else:
+        for term in followed_terms:
+            term_col, button_col = st.columns([4, 1])
+            term_col.write(f"• `{term}`")
+            if button_col.button("❌", key=f"delete_term_{term}", help=f"Stop following '{term}'"):
+                # Use the tenant-aware delete_followed_term_api
+                status_code = delete_followed_term_api(term)
+                if status_code == 204:
+                    st.success(f"Successfully unfollowed '{term}'.")
                     st.rerun()
-        
-        with st.form("follow_form", clear_on_submit=True):
-            new_term = st.text_input("Follow a new keyword/author:")
-            submitted = st.form_submit_button("Follow Term")
-            if submitted and new_term:
-                term_exists = db.query(FollowedTerm).filter(FollowedTerm.term == new_term.lower()).first()
-                if not term_exists:
-                    db.add(FollowedTerm(term=new_term.lower()))
-                    db.commit()
-                    st.rerun()
-    finally:
-        db.close()
+                else:
+                    st.error(f"Failed to unfollow term: {status_code}")
+    
+    with st.form("follow_form", clear_on_submit=True):
+        new_term = st.text_input("Follow a new keyword/author:")
+        submitted = st.form_submit_button("Follow Term")
+        if submitted and new_term:
+            # Use the tenant-aware add_followed_term_api
+            response_data, status_code = add_followed_term_api(new_term.lower())
+            if status_code == 200:
+                st.success(f"Successfully followed '{new_term}'.")
+                st.rerun()
+            else:
+                st.error(f"Failed to follow term: {response_data.get('detail', 'Unknown error')}")
 
 
     # --- Admin Actions ---
     st.divider()
     st.header("Admin Actions")
 
-    if st.button("Run Scraper Cycle", use_container_width=True):
-        task = run_scraper_cycle.delay()
-        st.session_state['scraper_task_id'] = task.id
+    if st.session_state.current_user and st.session_state.current_user['is_admin']:
+        if st.button("Run Scraper Cycle", use_container_width=True):
+            # Pass tenant_id to the Celery task
+            task = run_scraper_cycle.delay(st.session_state.current_user['tenant_id'])
+            st.session_state['scraper_task_id'] = task.id
 
-    if st.button("Find New Sources", use_container_width=True):
-        task = find_new_sources.delay()
-        st.session_state['sourcerer_task_id'] = task.id
+        if st.button("Find New Sources", use_container_width=True):
+            # find_new_sources is for shared sources, so no tenant_id needed here
+            task = find_new_sources.delay()
+            st.session_state['sourcerer_task_id'] = task.id
 
-    if 'scraper_task_id' in st.session_state:
-        task_id = st.session_state['scraper_task_id']
-        result = AsyncResult(task_id)
-        st.progress(1 if result.ready() else 0, text=f"Scraper: {result.state}")
-        if result.ready():
-            with st.expander("Scraper Result"):
-                st.write(result.get())
-            del st.session_state['scraper_task_id']
+        if 'scraper_task_id' in st.session_state:
+            task_id = st.session_state['scraper_task_id']
+            result = AsyncResult(task_id)
+            st.progress(1 if result.ready() else 0, text=f"Scraper: {result.state}")
+            if result.ready():
+                with st.expander("Scraper Result"):
+                    st.write(result.get())
+                del st.session_state['scraper_task_id']
 
 
-    if 'sourcerer_task_id' in st.session_state:
-        task_id = st.session_state['sourcerer_task_id']
-        result = AsyncResult(task_id)
-        st.progress(1 if result.ready() else 0, text=f"Sourcerer: {result.state}")
-        if result.ready():
-            with st.expander("Sourcerer Result"):
-                st.write(result.get())
-            del st.session_state['sourcerer_task_id']
+        if 'sourcerer_task_id' in st.session_state:
+            task_id = st.session_state['sourcerer_task_id']
+            result = AsyncResult(task_id)
+            st.progress(1 if result.ready() else 0, text=f"Sourcerer: {result.state}")
+            if result.ready():
+                with st.expander("Sourcerer Result"):
+                    st.write(result.get())
+                del st.session_state['sourcerer_task_id']
+    else:
+        st.info("You must be a tenant admin to perform these actions.")
 
+    if st.sidebar.button("Logout", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.access_token = None
+        st.session_state.current_user = None
+        st.cache_data.clear()
+        st.rerun()
 
 # --- 5. Main App ---
 st.title("🧠 The AI Progress Sentinel")
@@ -267,14 +434,9 @@ def process_and_display_feed(input_df: pd.DataFrame, tab_key_prefix: str):
                     comment = st.text_area("Optional Comment:", key=f"comment_{tab_key_prefix}_{item['id']}")
                     submitted = st.form_submit_button("Submit Flag")
                     if submitted:
-                        db = SessionLocal()
-                        try:
-                            new_flag = CorrectionFlag(item_id=int(item['id']), reason=reason, user_comment=comment)
-                            db.add(new_flag)
-                            db.commit()
-                            st.success("Flag submitted!")
-                        finally:
-                            db.close()
+                        # Use the tenant-aware add_correction_flag
+                        add_correction_flag(int(item['id']), reason, comment, st.session_state.current_user['tenant_id'])
+                        st.success("Flag submitted!")
                         del st.session_state[f"flagging_item_id_{tab_key_prefix}_{item['id']}"]
                         st.rerun()
 
@@ -288,9 +450,9 @@ if selected_tab_title == "🔥 All Progress":
     process_and_display_feed(df, tab_key_prefix="all_progress")
 
 elif selected_tab_title == "👤 My Feed":
-    db = SessionLocal()
-    followed_terms = [row.term for row in db.query(FollowedTerm.term).all()]
-    db.close()
+    # Use the tenant-aware get_followed_terms_api
+    followed_terms_objects = get_followed_terms_api()
+    followed_terms = [term['term'] for term in followed_terms_objects]
 
     if not followed_terms:
         st.info("You are not following any terms. Add some in the sidebar to create your personalized feed.")

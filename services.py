@@ -1,137 +1,150 @@
-# services.py
-
 import os
 import json
-import re
+from database import SessionLocal, TenantLLMConfig, get_llm_config_for_tenant, create_or_update_llm_config
+from typing import Optional
 import google.generativeai as genai
-from dotenv import load_dotenv
+from openai import OpenAI
 
-# --- Configuration ---
-load_dotenv()
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found in .env file.")
+class TenantConfigService:
+    @staticmethod
+    def get_llm_config(tenant_id: str) -> Optional[TenantLLMConfig]:
+        return get_llm_config_for_tenant(tenant_id)
 
-genai.configure(api_key=API_KEY)
+    @staticmethod
+    def create_or_update_llm_config(tenant_id: str, llm_provider: str, llm_model_name: str, api_key: str, base_url: Optional[str] = None, custom_settings: Optional[dict] = None) -> Optional[TenantLLMConfig]:
+        return create_or_update_llm_config(tenant_id, llm_provider, llm_model_name, api_key, base_url, custom_settings)
 
-# These settings are a good starting point for consistent JSON output
-generation_config = {
-    "temperature": 1.0,
-    "top_p": 0.95,
-    "top_k": 32,
-    "max_output_tokens": 65536,
-    "response_mime_type": "application/json",
-}
+# --- LLM Client Initialization (Dynamic) ---
+def get_llm_client(tenant_id: str):
+    llm_config = TenantConfigService.get_llm_config(tenant_id)
 
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-]
+    if not llm_config:
+        # Fallback to default if no tenant-specific config is found
+        print(f"No LLM config found for tenant {tenant_id}. Using default Google Gemini.")
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        return genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            generation_config={"response_mime_type": "application/json"}
+        )
 
-model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash", # Use the latest, most capable model
-    generation_config=generation_config,
-    safety_settings=safety_settings
-)
+    if llm_config.llm_provider == "google":
+        genai.configure(api_key=llm_config.get_api_key())
+        return genai.GenerativeModel(
+            model_name=llm_config.llm_model_name,
+            generation_config={"response_mime_type": "application/json"}
+        )
+    elif llm_config.llm_provider == "openai":
+        return OpenAI(
+            api_key=llm_config.get_api_key(),
+            base_url=llm_config.base_url if llm_config.base_url else None
+        )
+    elif llm_config.llm_provider == "huggingface":
+        # Hugging Face models typically require a different approach (e.g., Inference API)
+        # This is a placeholder. You'd integrate a Hugging Face client here.
+        raise NotImplementedError("Hugging Face LLM integration is not yet implemented.")
+    else:
+        raise ValueError(f"Unsupported LLM provider: {llm_config.llm_provider}")
 
-# --- Prompts ---
-UNIFIED_PROMPT_TEMPLATE = """
-You are a world-class, multi-lingual AI research analyst. Your task is to perform a comprehensive analysis of the provided text and return a single, structured JSON object.
+# --- AI Analysis Function (now uses dynamic LLM client) ---
+def analyze_rank_and_translate(title: str, abstract: str, tenant_id: str):
+    """
+    Analyzes a research paper's title and abstract to generate a structured
+    JSON output containing multi-lingual summaries, keywords, and a detailed
+    importance ranking.
 
-**Instructions:**
-1.  **Analyze:** Read the provided English title and content to understand the core innovation, methodology, results, and impact.
-2.  **Summarize & Translate:** Generate the content for the `en` (English) object first. Then, translate the `title`, `what_is_new`, `how_it_works`, `why_it_matters`, and `overall_importance_justification` fields accurately and naturally into each of the specified target languages: `zh` (Simplified Chinese).
-3.  **Rank:** Based on your English analysis, provide the numeric scores. Justifications should also be translated.
-4.  **Format:** Your entire response must be a single, valid JSON object adhering strictly to the schema below. All fields are mandatory.
+    This function now includes a more robust and detailed prompt to ensure
+    the AI returns all required fields, including a full score breakdown.
+    The overall score is calculated downstream, not requested from the AI.
+    """
+    llm_client = get_llm_client(tenant_id)
 
-**Original English Title:**
-{title}
+    # The overall_importance_score is removed from the prompt, but the
+    # justification is kept for UI display.
+    prompt = f'''Analyze the following research paper/article and provide a comprehensive analysis in a structured JSON format.
 
-**Content for Analysis:**
----
-{content_text}
----
+Title: {title}
+Abstract: {abstract}
 
-**Output Schema (JSON):**
+Your output MUST be a single, valid JSON object. Do not include any text or formatting before or after the JSON.
+The JSON object must follow this exact structure, including all fields:
 {{
   "en": {{
-    "title": "{title}",
-    "what_is_new": "A compelling paragraph in English explaining the core innovation.",
-    "how_it_works": "An easy-to-understand explanation in English of the methodology.",
-    "why_it_matters": "A paragraph in English explaining the potential impact.",
-    "overall_importance_justification": "A final synthesis in English of why this breakthrough is important."
+    "title": "A concise, translated title in English.",
+    "what_is_new": "A detailed summary of the key innovations and findings presented in the paper.",
+    "why_it_matters": "A clear explanation of the potential impact and significance of this research.",
+    "how_it_works": "A simplified explanation of the methodology or technology described."
   }},
   "zh": {{
-    "title": "一个翻译成简体中文的准确标题。",
-    "what_is_new": "一个引人注目的段落，用简体中文解释核心创新。",
-    "how_it_works": "一个易于理解的解释，用简体中文说明其方法论。",
-    "why_it_matters": "一个段落，用简体中文解释其潜在影响。",
-    "overall_importance_justification": "一段最终综合陈述，用简体中文说明此突破为何重要。"
+    "title": "一个简洁的中文翻译标题。",
+    "what_is_new": "关于论文中提出的关键创新和发现的详细中文摘要。",
+    "why_it_matters": "关于这项研究的潜在影响和重要性的清晰中文解释。",
+    "how_it_works": "对所描述方法或技术的简化中文说明。"
   }},
-  "keywords": ["An", "array", "of", "5-7", "English", "keywords"],
+  "keywords": [
+    "keyword1",
+    "keyword2",
+    "keyword3"
+  ],
   "ranking": {{
+    "overall_importance_justification": "A detailed justification for the overall importance, considering all factors. This will be displayed in the UI.",
     "scores": {{
-      "breakthrough_novelty": {{ "score": "[1-10]", "justification": "Justification in English." }},
-      "human_impact": {{ "score": "[1-10]", "justification": "Justification in English." }},
-      "field_influence": {{ "score": "[1-10]", "justification": "Justification in English." }},
-      "technical_maturity": {{ "score": "[1-10]", "justification": "Justification in English." }}
-    }},
-    "overall_importance_score": "[A single floating-point number from 1.0 to 10.0, e.g., 8.7]"
+      "breakthrough_novelty": {{
+        "score": "A score from 0 to 10 for novelty.",
+        "justification": "Justification for the novelty score."
+      }},
+      "human_impact": {{
+        "score": "A score from 0 to 10 for human impact.",
+        "justification": "Justification for the human impact score."
+      }},
+      "field_influence": {{
+        "score": "A score from 0 to 10 for field influence.",
+        "justification": "Justification for the field influence score."
+      }},
+      "technical_maturity": {{
+        "score": "A score from 0 to 10 for technical maturity.",
+        "justification": "Justification for the technical maturity score."
+      }}
+    }}
   }}
 }}
-"""
+'''
 
-def clean_json_response(response_text):
-    """
-    Cleans the Gemini response to extract a valid JSON object,
-    even if it's embedded in markdown or has trailing commas.
-    """
-    # Find the start and end of the JSON block using curly braces
-    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-    if not json_match:
-        print("SERVICES: ERROR - No JSON object found in the response.")
-        return None
-    
-    json_str = json_match.group(0)
-    
     try:
-        # The primary method: try to load the JSON directly
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        print(f"SERVICES: WARN - Initial JSON decode failed: {e}. Attempting to fix common errors.")
-        # Attempt to fix common errors, like trailing commas
-        # This is a common issue with LLM-generated JSON
-        try:
-            # Remove trailing commas from objects and arrays
-            json_str_fixed = re.sub(r',\s*([}\]])', r'\1', json_str)
-            return json.loads(json_str_fixed)
-        except json.JSONDecodeError as e2:
-            print(f"SERVICES: ERROR - Failed to decode JSON even after fixing trailing commas: {e2}")
-            print(f"--- FAULTY JSON STRING --- \n{json_str}\n--------------------------")
-            return None
-
-def analyze_rank_and_translate(title: str, content_text: str):
-    """
-    Performs summarization, ranking, and translation in a single API call.
-
-    Returns:
-        A single, comprehensive dictionary, or None on failure.
-    """
-    print(f"SERVICES: Starting unified analysis for '{title}'")
-    
-    try:
-        prompt = UNIFIED_PROMPT_TEMPLATE.format(title=title, content_text=content_text)
-        response = model.generate_content(prompt)
-        analysis_data = clean_json_response(response.text)
+        if isinstance(llm_client, genai.GenerativeModel):
+            # For Gemini, the prompt is sent directly.
+            response = llm_client.generate_content(prompt)
+            # It's good practice to add a print statement for debugging the raw response
+            print(f"DEBUG: Raw Gemini response: {response.text}")
+            return json.loads(response.text)
         
-        if not analysis_data:
-            raise ValueError("Cleaned JSON from Gemini is None.")
+        elif isinstance(llm_client, OpenAI):
+            # For OpenAI, the prompt is part of the messages list.
+            chat_completion = llm_client.chat.completions.create(
+                model=getattr(llm_client, 'model', 'gpt-4-turbo'), # Safely get model
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            response_content = chat_completion.choices[0].message.content
+            # Debugging for OpenAI response
+            print(f"DEBUG: Raw OpenAI response: {response_content}")
+            return json.loads(response_content)
+        
+        else:
+            print(f"Unsupported LLM client type: {type(llm_client)}")
+            raise ValueError("Unsupported LLM client type.")
             
-        print(f"SERVICES: Unified analysis complete for '{title}'")
-        return analysis_data
+    except json.JSONDecodeError as e:
+        # This error is crucial for debugging invalid JSON from the LLM
+        print(f"SERVICES: FATAL ERROR - Failed to decode JSON from LLM response. Error: {e}")
+        # Optionally, log the raw response text that failed to parse
+        raw_response = "Unknown"
+        if 'response' in locals() and hasattr(response, 'text'):
+            raw_response = response.text
+        elif 'response_content' in locals():
+            raw_response = response_content
+        print(f"SERVICES: Raw failing response: {raw_response}")
+        return None # Return None to indicate failure
         
     except Exception as e:
-        print(f"SERVICES: ERROR in unified analysis step for '{title}': {e}")
+        print(f"SERVICES: An unexpected error occurred during LLM analysis: {e}")
         return None
