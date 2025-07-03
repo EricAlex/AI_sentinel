@@ -58,8 +58,8 @@ Follow these steps to get the entire application stack running locally.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/ai-progress-sentinel.git
-cd ai-progress-sentinel
+git clone https://github.com/EricAlex/AI_sentinel.git
+cd AI_sentinel
 ```
 
 ### 2. Configure Environment Variables
