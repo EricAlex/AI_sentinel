@@ -2,11 +2,11 @@
 
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import re
 from urllib.parse import urljoin
-from googlesearch import search
+
 
 # --- Standard Request Headers to mimic a browser ---
 HEADERS = {
@@ -82,8 +82,8 @@ def parse_google_blog(url: str, source_name: str, max_results=8) -> list:
             
             if published_date_str:
                 # Parse date and format to ISO 8601 with UTC timezone
-                dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d')
-                published_date = dt_obj.strftime('%Y-%m-%dT00:00:00Z')
+                dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                published_date = dt_obj.isoformat(timespec='seconds')
             else:
                 published_date = None
             
@@ -100,7 +100,7 @@ def parse_google_blog(url: str, source_name: str, max_results=8) -> list:
                 "source": source_name,
             })
 
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"Skipping a post due to parsing error: {e}")
             continue
             
@@ -161,8 +161,8 @@ def parse_openai_blog(url: str, source_name: str, max_results=8) -> list:
             if date_tag and date_tag.has_attr('data-date'):
                 published_date_str = date_tag['data-date']
                 try:
-                    dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d')
-                    published_date = dt_obj.strftime('%Y-%m-%dT00:00:00Z')
+                    dt_obj = datetime.strptime(published_date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                    published_date = dt_obj.isoformat(timespec='seconds')
                 except ValueError as ve:
                     print(f"Date format error for {published_date_str}: {ve}")
 
@@ -179,7 +179,7 @@ def parse_openai_blog(url: str, source_name: str, max_results=8) -> list:
                 "source": source_name,
             })
 
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"Skipping a post due to a parsing error: {e}")
             continue
 
@@ -206,28 +206,18 @@ def parse_meta_blog(url: str, source_name: str, max_results=8):
 
             posts.append({
                 "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": ["Meta AI"], "published_date": datetime.utcnow(),
+                "authors": ["Meta AI"], "published_date": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec='seconds'),
                 "url": post_url, "source": source_name
             })
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
             continue
     return posts
 
 def parse_huggingface_blog(url: str, source_name: str, max_results=8) -> list:
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching URL {url}: {e}")
-        return []
-
-    soup = BeautifulSoup(response.text, 'html.parser')
+    soup = get_soup(url)
+    if not soup: return []
     results = []
     
     # Articles are contained within divs with a 'data-target' attribute.
@@ -265,8 +255,8 @@ def parse_huggingface_blog(url: str, source_name: str, max_results=8) -> list:
                 # The date is already in ISO 8601 format, e.g., "2025-06-16T00:00:00.000Z"
                 # We can parse it to validate and then reformat, or use as is.
                 # Let's parse and reformat to ensure consistency without milliseconds.
-                dt_obj = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-                published_date = dt_obj.strftime("%Y-%m-%dT%H:%M:%SZ")
+                dt_obj = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                published_date = dt_obj.isoformat(timespec='seconds')
             else:
                 published_date = None
             
@@ -301,14 +291,14 @@ def parse_microsoft_blog(url: str, source_name: str, max_results=8):
             abstract_tag = article.find('p')
             abstract = abstract_tag.text.strip() if abstract_tag else ""
             time_tag = article.find('time')
-            published_date = datetime.fromisoformat(time_tag['datetime'].replace('Z', '+00:00')) if time_tag else datetime.utcnow()
+            published_date = datetime.fromisoformat(time_tag['datetime'].replace('Z', '+00:00')).isoformat(timespec='seconds') if time_tag else datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec='seconds')
 
             posts.append({
                 "entry_id": post_url, "title": title, "abstract": abstract,
                 "authors": ["Microsoft Research"], "published_date": published_date,
                 "url": post_url, "source": source_name
             })
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
             continue
     return posts
@@ -342,7 +332,7 @@ def parse_techreview_ai(url: str, source_name: str, max_results=8) -> list:
 
             # Date and authors are not easily available on the list page, so we set defaults.
             # A more advanced implementation might visit each post_url to get these details.
-            published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            published_date = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec='seconds')
             authors = ["MIT Technology Review"]
 
             posts.append({
@@ -354,7 +344,7 @@ def parse_techreview_ai(url: str, source_name: str, max_results=8) -> list:
                 "url": post_url,
                 "source": source_name,
             })
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
             continue
     return posts
@@ -380,10 +370,10 @@ def parse_gradient_pub(url: str, source_name: str, max_results=8):
             
             posts.append({
                 "entry_id": post_url, "title": title, "abstract": abstract,
-                "authors": ["The Gradient"], "published_date": datetime.utcnow(),
+                "authors": ["The Gradient"], "published_date": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec='seconds'),
                 "url": post_url, "source": source_name
             })
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
             continue
     return posts
@@ -422,7 +412,7 @@ def parse_nvidia_blog(url: str, source_name: str, max_results=8) -> list:
                 except ValueError:
                     published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
             else:
-                published_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+                published_date = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec='seconds')
 
             authors = ["NVIDIA"]
 
@@ -435,7 +425,7 @@ def parse_nvidia_blog(url: str, source_name: str, max_results=8) -> list:
                 "url": post_url,
                 "source": source_name,
             })
-        except Exception as e:
+        except (AttributeError, KeyError, IndexError, ValueError) as e:
             print(f"PARSER: Failed to parse a card from {source_name}: {e}")
             continue
     return posts

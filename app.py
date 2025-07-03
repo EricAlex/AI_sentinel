@@ -43,7 +43,6 @@ def get_embedding_model():
     print("Loading embedding model from local path...")
     return SentenceTransformer(LOCAL_MODEL_PATH)
 
-@st.cache_resource
 def get_chroma_client():
     print("Connecting to ChromaDB...")
     CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
@@ -60,6 +59,7 @@ model = get_embedding_model()
 client = get_chroma_client()
 progress_collection = client.get_or_create_collection(name="ai_progress")
 all_data = load_data()
+st.cache_data.clear() # Clear cache on app start to ensure fresh data
 
 # Initialize session state for BOTH tabs' pagination independently
 if "all_progress_page" not in st.session_state:
@@ -103,13 +103,28 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("Search")
-    semantic_query = st.text_input("Search for concepts...", placeholder="e.g., efficient transformers")
-    search_term = st.text_input("Filter results by keyword...", placeholder="e.g., mamba")
-    
+    semantic_query = st.text_input("Search for concepts...", placeholder="e.g., efficient transformers", key="semantic_query_input")
+    search_term = st.text_input("Filter results by keyword...", placeholder="e.g., mamba", key="keyword_search_input")
+
     sort_options = ["Importance Score", "Date"]
+    default_sort_value = "Importance Score" # Default if no semantic query
+
     if semantic_query:
         sort_options.insert(0, "Relevance")
-    sort_key = st.selectbox("Sort by", options=sort_options, index=0)
+        default_sort_value = "Relevance" # If semantic query, default to Relevance
+
+    # Use a session state variable to control the default value of the selectbox
+    # This ensures that when semantic_query is active, "Relevance" is pre-selected.
+    if "current_sort_key" not in st.session_state:
+        st.session_state.current_sort_key = default_sort_value
+    elif semantic_query and st.session_state.current_sort_key != "Relevance":
+        # If semantic query is active, and sort key is not Relevance, set it to Relevance
+        st.session_state.current_sort_key = "Relevance"
+    elif not semantic_query and st.session_state.current_sort_key == "Relevance":
+        # If semantic query is NOT active, and sort key IS Relevance, reset it to default
+        st.session_state.current_sort_key = "Importance Score"
+
+    sort_key = st.selectbox("Sort by", options=sort_options, key="sort_by_selectbox", index=sort_options.index(st.session_state.current_sort_key))
     
     all_sources = sorted(list(set(item['source'] for item in all_data))) if all_data else []
     selected_sources = st.multiselect("Filter by Source", options=all_sources, default=all_sources)
@@ -187,45 +202,60 @@ if not all_data:
     st.warning("The database is currently empty. Please wait for the scraper to populate it.")
     st.stop()
 
+print(f"DEBUG APP: all_data has {len(all_data)} items")
 df = pd.DataFrame(all_data)
+print(f"DEBUG APP: DataFrame has {len(df)} rows after conversion")
 df['id'] = df['id'].astype(str)
 df['published_date'] = pd.to_datetime(df['published_date'], errors='coerce')
 
 
 # --- Reusable Display Function ---
 def process_and_display_feed(input_df: pd.DataFrame, tab_key_prefix: str):
+    print(f"DEBUG APP: process_and_display_feed received {len(input_df)} rows")
     page_number_key = f"{tab_key_prefix}_page"
     
     # Filtering Logic
     results_df = input_df
     if semantic_query:
+        print(f"DEBUG APP: Semantic query active: {semantic_query}")
         with st.spinner("Performing semantic search..."):
             query_embedding = model.encode(semantic_query).tolist()
             results = progress_collection.query(query_embeddings=[query_embedding], n_results=50)
             relevant_ids = results['ids'][0]
             if not relevant_ids:
                 results_df = pd.DataFrame(columns=df.columns)
+                print("DEBUG APP: Semantic search returned no relevant IDs.")
             else:
                 results_df = df[df['id'].isin(relevant_ids)].copy()
                 relevance_scores = {id_str: dist for id_str, dist in zip(results['ids'][0], results['distances'][0])}
                 results_df['relevance'] = results_df['id'].map(relevance_scores)
+                print(f"DEBUG APP: Semantic search filtered to {len(results_df)} rows.")
     
     if selected_sources:
+        print(f"DEBUG APP: Source filter active: {selected_sources}")
         results_df = results_df[results_df['source'].isin(selected_sources)]
+        print(f"DEBUG APP: After source filter: {len(results_df)} rows.")
     if search_term:
+        print(f"DEBUG APP: Keyword filter active: {search_term}")
         term_lower = search_term.lower()
         results_df = results_df[results_df.apply(
             lambda row: term_lower in str(row['title']).lower() or term_lower in str(row['keywords']).lower(),
             axis=1
         )]
+        print(f"DEBUG APP: After keyword filter: {len(results_df)} rows.")
     
+    print(f"DEBUG APP: Before sorting, results_df has {len(results_df)} rows.")
     # Sorting Logic
     if sort_key == "Relevance" and 'relevance' in results_df.columns:
         sorted_df = results_df.sort_values('relevance', ascending=True)
+        print(f"DEBUG APP: Sorted by Relevance. sorted_df has {len(sorted_df)} rows.")
     elif sort_key == "Importance Score":
+        results_df['overall_importance_score'] = pd.to_numeric(results_df['overall_importance_score'], errors='coerce').fillna(0.0)
         sorted_df = results_df.sort_values('overall_importance_score', ascending=False)
-    else:
+        print(f"DEBUG APP: Sorted by Importance Score. sorted_df has {len(sorted_df)} rows.")
+    else: # Default to date
         sorted_df = results_df.sort_values('published_date', ascending=False, na_position='last')
+        print(f"DEBUG APP: Sorted by Date. sorted_df has {len(sorted_df)} rows.")
 
     # Pagination Logic
     total_items = len(sorted_df)
@@ -237,6 +267,7 @@ def process_and_display_feed(input_df: pd.DataFrame, tab_key_prefix: str):
     start_index = (st.session_state[page_number_key] - 1) * page_size
     end_index = start_index + page_size
     paginated_df = sorted_df.iloc[start_index:end_index]
+    print(f"DEBUG APP: Paginated_df has {len(paginated_df)} rows (Page {st.session_state[page_number_key]} of {total_pages}).")
 
     # Pagination UI
     st.subheader(f"Showing {len(paginated_df)} of {total_items} breakthroughs")
@@ -279,7 +310,7 @@ def process_and_display_feed(input_df: pd.DataFrame, tab_key_prefix: str):
                         st.rerun()
 
 # --- Tab Definitions ---
-tab_titles = ["🔥 All Progress", "👤 My Feed"]
+tab_titles = ["🔥 All Progress", "❤️ My Feed"]
 
 # Use st.radio to simulate tabs and manage active tab state
 selected_tab_title = st.radio("", tab_titles, key="main_tab_selector", horizontal=True)

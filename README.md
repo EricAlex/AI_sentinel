@@ -17,12 +17,12 @@ This system continuously scans a wide range of sources—from academic pre-print
     *   Official AI Blogs (Microsoft Research, and others as they are maintained)
 *   **AI-Powered Summarization & Ranking:** Uses Google Gemini to perform a two-step analysis on each item:
     1.  **Summarization:** Generates a structured summary explaining what's new, how it works, and why it matters.
-    2.  **Ranking:** Scores the breakthrough on multiple axes (Novelty, Human Impact, Field Influence, Technical Maturity) with justifications.
+    2.  **Ranking:** Scores the breakthrough on multiple axes (Novelty, Human Impact, Field Influence, Technical Maturity). The overall importance score is calculated as an average of these four scores, ensuring consistency and accuracy.
 *   **Semantic Search:** Powered by vector embeddings, allowing users to search for concepts and ideas, not just keywords (e.g., "alternatives to transformers").
-*   **Interactive Dashboard:** A modern web UI built with Streamlit for intuitive filtering, sorting, and exploration of AI progress.
+*   **Interactive Dashboard:** A modern web UI built with Streamlit for intuitive filtering, sorting, and exploration of AI progress, featuring improved tab titles for clarity.
 *   **Personalization:** Users can "follow" specific keywords or authors to create a personalized feed.
 *   **Automated & Resilient:** Built on a production-grade, containerized architecture using Docker and Celery to handle background processing, task queuing, and automatic retries.
-*   **AI-Driven Source Discovery:** A `sourcerer` service that periodically finds and validates new potential AI blogs to add to the ingestion pipeline.
+*   **AI-Driven Source Discovery & Healing:** A `sourcerer` service that periodically finds and validates new potential AI blogs and attempts to automatically fix broken parsers, enhancing data ingestion reliability.
 *   **Admin & Health Dashboard:** A password-protected page to monitor system health, service status, and review user-flagged content.
 
 ---
