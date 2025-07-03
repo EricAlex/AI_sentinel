@@ -11,7 +11,7 @@ from sourcerer import attempt_heal_parser
 
 redis_client = Redis.from_url(os.getenv('CELERY_BROKER_URL'), decode_responses=True)
 
-def fetch_from_arxiv(max_results=100):
+def fetch_from_arxiv(max_results=int(os.getenv('DB_MAX_ARXIV_RESULTS', 100))):
     """Fetches papers from arXiv using its dedicated Python library."""
     print("INGEST: Fetching from arXiv source...")
     query = "cat:cs.LG OR cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.RO"

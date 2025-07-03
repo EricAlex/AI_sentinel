@@ -1,5 +1,4 @@
 # docker-compose.yml
-version: '3.8'
 
 services:
   # --- INFRASTRUCTURE SERVICES ---
@@ -116,18 +115,7 @@ services:
     restart: unless-stopped
     logging: *logging_config
 
-  scraper:
-    build:
-      context: .
-      dockerfile: Dockerfile.scraper
-    container_name: synthesis_engine_scraper
-    env_file: .env
-    volumes:
-      - ./parsers.py:/app/parsers.py
-    depends_on:
-      - celery_worker # Ensures queue is ready to receive tasks
-    restart: unless-stopped
-    logging: *logging_config
+  
 
 volumes:
   postgres_data:

@@ -85,6 +85,33 @@ def create_all_tables():
     Base.metadata.create_all(bind=engine)
     print("DATABASE: Tables created successfully (if they didn't exist).")
 
+def _validate_progress_item(item_data: dict) -> bool:
+    """
+    Validates if a progress item has required fields and non-zero overall importance score.
+    """
+    required_fields = ['entry_id', 'title', 'url', 'source', 'published_date', 'analysis_data']
+    for field in required_fields:
+        if field not in item_data or not item_data[field]:
+            print(f"DATABASE: Validation failed - Missing or empty required field: {field}")
+            return False
+
+    analysis = item_data.get('analysis_data', {})
+    ranking = analysis.get('ranking', {})
+    overall_score = ranking.get('overall_importance_score', 0.0)
+
+    if not isinstance(overall_score, (int, float)) or overall_score <= 0.0:
+        print(f"DATABASE: Validation failed - overall_importance_score is zero or invalid: {overall_score}")
+        return False
+    
+    # Optional: Check if individual scores are all zero if overall is derived from them
+    # This check is more robust if the overall_importance_score is calculated externally
+    scores = ranking.get('scores', {})
+    if all(float(scores.get(k, {}).get('score', 0.0)) <= 0.0 for k in ["breakthrough_novelty", "human_impact", "field_influence", "technical_maturity"]):
+        print("DATABASE: Validation failed - All individual scores are zero or invalid.")
+        return False
+
+    return True
+
 def add_progress_item(item_data: dict):
     """
     Adds a newly fetched and analyzed item to the database.
@@ -92,38 +119,39 @@ def add_progress_item(item_data: dict):
     
     Returns: The newly created ProgressItem object or None.
     """
-    db = SessionLocal()
-    try:
-        new_item = ProgressItem(
-            entry_id=item_data['entry_id'],
-            title=item_data.get('title', 'Untitled'),
-            url=item_data['url'],
-            source=item_data['source'],
-            published_date=item_data['published_date'],
-            analysis_data=item_data['analysis_data']
-        )
-        db.add(new_item)
-        db.commit()
-        db.refresh(new_item)
-        print(f"DATABASE: Successfully added '{new_item.title}' to the database.")
-        return new_item
-    except IntegrityError:
-        db.rollback()
-        print(f"DATABASE: Item with entry_id '{item_data['entry_id']}' already exists. Skipping.")
+    if not _validate_progress_item(item_data):
+        print(f"DATABASE: Failed to add item '{item_data.get('title', 'Untitled')}' due to validation errors.")
         return None
-    except Exception as e:
-        db.rollback()
-        print(f"DATABASE: An unexpected error occurred while adding an item: {e}")
-        return None
-    finally:
-        db.close()
+
+    with SessionLocal() as db:
+        try:
+            new_item = ProgressItem(
+                entry_id=item_data['entry_id'],
+                title=item_data.get('title', 'Untitled'),
+                url=item_data['url'],
+                source=item_data['source'],
+                published_date=item_data['published_date'],
+                analysis_data=item_data['analysis_data']
+            )
+            db.add(new_item)
+            db.commit()
+            db.refresh(new_item)
+            print(f"DATABASE: Successfully added '{new_item.title}' to the database.")
+            return new_item
+        except IntegrityError:
+            db.rollback()
+            print(f"DATABASE: Item with entry_id '{item_data['entry_id']}' already exists. Skipping.")
+            return None
+        except Exception as e:
+            db.rollback()
+            print(f"DATABASE: An unexpected error occurred while adding an item: {e}")
+            return None
 
 def get_all_progress_items():
     """
     Fetches all items and flattens the NEW multi-lingual structure for the UI.
     """
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         items = db.query(ProgressItem).order_by(ProgressItem.published_date.desc()).all()
         results = []
         for item in items:
@@ -140,99 +168,86 @@ def get_all_progress_items():
                 # Flattened fields for searching/sorting, always from English
                 "title": analysis.get('en', {}).get('title', 'Untitled'),
                 "keywords": analysis.get('keywords', []),
-                "overall_importance_score": float(ranking.get('overall_importance_score', 0.0)),
+                "overall_importance_score": float(ranking.get('overall_importance_score', 0.0) or 0.0),
             }
             results.append(flat_item)
         return results
-    finally:
-        db.close()
 
 def get_all_sources():
     """Fetches all sources from the database."""
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         return db.query(Source).all()
-    finally:
-        db.close()
 
 def add_new_source(name: str, url: str, source_type: str):
     """Adds a new source to the database."""
-    db = SessionLocal()
-    try:
-        # Check if source already exists to prevent duplicates
-        exists = db.query(Source).filter((Source.name == name) | (Source.url == url)).first()
-        if exists:
-            print(f"DATABASE: Source '{name}' or URL '{url}' already exists.")
+    with SessionLocal() as db:
+        try:
+            # Check if source already exists to prevent duplicates
+            exists = db.query(Source).filter((Source.name == name) | (Source.url == url)).first()
+            if exists:
+                print(f"DATABASE: Source '{name}' or URL '{url}' already exists.")
+                return None
+            
+            new_source = Source(name=name, url=url, source_type=source_type, is_active=True)
+            db.add(new_source)
+            db.commit()
+            db.refresh(new_source)
+            print(f"DATABASE: Successfully added new source '{name}'.")
+            return new_source
+        except Exception as e:
+            db.rollback()
+            print(f"DATABASE: Error adding new source: {e}")
             return None
-        
-        new_source = Source(name=name, url=url, source_type=source_type, is_active=True)
-        db.add(new_source)
-        db.commit()
-        db.refresh(new_source)
-        print(f"DATABASE: Successfully added new source '{name}'.")
-        return new_source
-    except Exception as e:
-        db.rollback()
-        print(f"DATABASE: Error adding new source: {e}")
-        return None
-    finally:
-        db.close()
 
 def update_source(source_id: int, new_data: dict):
     """Updates an existing source's data."""
-    db = SessionLocal()
-    try:
-        source = db.query(Source).get(source_id)
-        if not source:
+    with SessionLocal() as db:
+        try:
+            source = db.query(Source).get(source_id)
+            if not source:
+                return False
+            
+            for key, value in new_data.items():
+                setattr(source, key, value)
+            
+            db.commit()
+            print(f"DATABASE: Successfully updated source ID {source_id}.")
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"DATABASE: Error updating source: {e}")
             return False
-        
-        for key, value in new_data.items():
-            setattr(source, key, value)
-        
-        db.commit()
-        print(f"DATABASE: Successfully updated source ID {source_id}.")
-        return True
-    except Exception as e:
-        db.rollback()
-        print(f"DATABASE: Error updating source: {e}")
-        return False
-    finally:
-        db.close()
 
 def delete_source(source_id: int):
     """Deletes a source from the database."""
-    db = SessionLocal()
-    try:
-        source = db.query(Source).get(source_id)
-        if not source:
+    with SessionLocal() as db:
+        try:
+            source = db.query(Source).get(source_id)
+            if not source:
+                return False
+            
+            db.delete(source)
+            db.commit()
+            print(f"DATABASE: Successfully deleted source ID {source_id}.")
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"DATABASE: Error deleting source: {e}")
             return False
-        
-        db.delete(source)
-        db.commit()
-        print(f"DATABASE: Successfully deleted source ID {source_id}.")
-        return True
-    except Exception as e:
-        db.rollback()
-        print(f"DATABASE: Error deleting source: {e}")
-        return False
-    finally:
-        db.close()
 
 def delete_followed_term(term_to_delete: str):
     """Deletes a followed term from the database."""
-    db = SessionLocal()
-    try:
-        term_object = db.query(FollowedTerm).filter(FollowedTerm.term == term_to_delete).first()
-        if term_object:
-            db.delete(term_object)
-            db.commit()
-            print(f"DATABASE: Successfully deleted followed term '{term_to_delete}'.")
-            return True
-        return False
-    except Exception as e:
-        db.rollback()
-        print(f"DATABASE: Error deleting followed term: {e}")
-        return False
-    finally:
-        db.close()
+    with SessionLocal() as db:
+        try:
+            term_object = db.query(FollowedTerm).filter(FollowedTerm.term == term_to_delete).first()
+            if term_object:
+                db.delete(term_object)
+                db.commit()
+                print(f"DATABASE: Successfully deleted followed term '{term_to_delete}'.")
+                return True
+            return False
+        except Exception as e:
+            db.rollback()
+            print(f"DATABASE: Error deleting followed term: {e}")
+            return False
 
